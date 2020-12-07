@@ -1,0 +1,217 @@
+---
+title: "Predicting barbell lifting quality with wearable devices"
+author: "justmzen"
+date: "06/12/2020"
+output: md_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+        eval = TRUE,
+        echo = TRUE,
+        message = FALSE,
+        warning = FALSE,
+        cache = TRUE
+)
+```
+
+# Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+The goal of this project is to predict the manner in which a participant did the exercise. This is the "classe" variable in the training set. Any of the other variables can be used to predict with.  
+
+A report should be created describing how the model was built, how cross validation was used, the expected out of sample error and the reasons for all those choices. It is also asked to used the prediction model to predict 20 different test cases.  
+
+The authors provide a data set with 5 classes (sitting-down, standing-up, standing, walking, and sitting) of 4 subjects in a range of 8 hours activities [1].  
+
+The data for the project come from this source: http://groupware.les.inf.puc-rio.br/har.  
+
+More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).  
+
+# Data downloading a reading
+
+```{r Data downloading}
+if(!dir.exists('./input')) dir.create('./input')
+if(!file.exists(('./input/training.csv'))){
+        fileURLTraining <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+        download.file(fileURLTraining, destfile = './input/training.csv')
+        rm(fileURLTraining)
+}
+if(!file.exists(('./input/testing.csv'))){
+        fileURLTesting <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+        download.file(fileURLTesting, destfile = './input/testing.csv')
+        rm(fileURLTesting)
+}
+```
+
+```{r Data reading}
+global_training <- read.csv(file = './input/training.csv',
+                            stringsAsFactors = TRUE)
+validation <- read.csv(file = './input/testing.csv',
+                       stringsAsFactors = TRUE)
+```
+
+# Exploratory data analysis
+
+In order to find relevant variables we will perform a brief EDA. There are `r dim(global_training)[2]` variables and `r dim(global_training)[1]` observations.  
+
+The first 5 variables are label variables, such as row number and people's names, whereas all the other from the 6th to the 160th are logical or numeric:  
+
+```{r}
+head(global_training)[1:10]
+```
+
+We will exclude the first five variables in order to have only logical, numerical and relevant factor variables.
+
+```{r Data reduction part 1}
+global_training <- global_training[, -(1:5)]
+validation <- validation[, -(1:5)]
+```
+
+There is also an important number of variables mostly composed by NAs. We will exclude these variables as well.
+
+```{r Data reduction part 2}
+emptyVariables <- sapply(X = global_training,
+                         function(x) {mean(is.na(x)) > 0.8}
+)
+
+global_training <- global_training[, emptyVariables == FALSE]
+validation <- validation[, emptyVariables == FALSE]
+
+numNAVariables <- sum(emptyVariables)
+```
+
+The number of these variables is `r numNAVariables`.
+
+There are also variables with low variability, hence not representative of the phenomenons. We will also exclude them. The 'caret' package provides the 'nearZeroVar' function which diagnoses predictors with zero variance and predictors with few unique values compared to the number of samples.  
+
+```{r Data reduction part 3}
+library('caret')
+nearZeroVarVariables <- nearZeroVar(global_training)
+
+global_training <- global_training[, -nearZeroVarVariables]
+validation <- validation[, -nearZeroVarVariables]
+```
+
+# Cross validation
+
+The large amount of data provided as training data let us split it into two different data sets, one used as the trainer and called "training" and the second used as the tester and called "testing". The secondo original data set, provided for the prediction, will be called "validation".  
+
+The partition of the original data set will be done via random sampling. A percentage fixed at 70% will form the training set and the other 30% will form the test one:  
+
+```{r Data partition}
+set.seed(6574)
+inTrain <- createDataPartition(y = global_training$classe,
+                               p = 0.70, list = FALSE)
+
+training <- global_training[inTrain, ]
+testing <- global_training[-inTrain, ]
+```
+
+# Machine learning modelling
+
+Three machine learning models will be built on the 'training' data set and then applied to the 'testing' data set. The accuracy will be calculated for each of them through confusion matrices. The machine leaning model with the highest accuracy will finally be applied to predict the 'class' of the 'validation' data set.
+
+## 1. Decision tree
+
+```{r Decision tree model}
+# Model building
+set.seed(98621)
+require('e1071')
+modFitDecisionTree <- train(classe ~ ., data = training,
+                            method = 'rpart')
+
+# Plot
+require('rattle')
+fancyRpartPlot(modFitDecisionTree$finalModel, caption = '')
+
+# Prediction
+predictionDecisionTree <- predict(modFitDecisionTree,
+                                  newdata = testing)
+
+# Accuracy
+confDecisionTree <- confusionMatrix(predictionDecisionTree,
+                                    testing$classe)
+confDecisionTree
+```
+
+## 2. Random forest model
+
+
+```{r Random forest model}
+# Model building
+set.seed(98621)
+require('dplyr')
+require('randomForest')
+trControlRF <- trainControl(method = 'cv', number = 3, verboseIter = FALSE)
+startTime <- Sys.time()
+modFitRandomForest <- train(x = select(training, -classe),
+                            y = as.factor(training$classe),
+                            method = 'rf',
+                            trControl = trControlRF)
+endTime <- Sys.time()
+
+# Prediction
+predictionRandomForest <- predict(modFitRandomForest,
+                                  newdata = testing)
+
+# Accuracy
+confRandomForest <- confusionMatrix(predictionRandomForest,
+                                    testing$classe)
+confRandomForest
+
+# Execution time
+exTime <- endTime - startTime
+```
+
+Generally, random forest models overfit and require long calculation times. The time require for this model and for these parameters is `r round(exTime, 2)` minutes with the following environment:
+
+```{r}
+sessionInfo()
+```
+
+## 3. Generalised boosted model
+
+```{r Regularised regression model}
+# Model building
+set.seed(98621)
+require('gbm')
+trControlGBM <- trainControl(method = 'cv', number = 4, repeats = 1)
+modFitBoosting <- train(classe ~ ., data = training,
+                        method = 'gbm', trControl = trControlGBM,
+                        verbose = FALSE)
+
+# Prediction
+predictionBoosting <- predict(modFitBoosting,
+                              newdata = testing)
+
+# Accuracy
+confBoosting <- confusionMatrix(predictionBoosting,
+                                testing$classe)
+confBoosting
+```
+
+## Model selection
+
+Based on the overall accuracies:  
+- Decision tree model: `r confDecisionTree$overall[1]`  
+- Random forest model: `r confRandomForest$overall[1]`  
+- Boosting model: `r confBoosting$overall[1]`  
+
+The random forest model will be used for the prediction.
+
+# Prediction
+
+With random forest model, the predicted values for the 'validation' data set are:
+
+```{r Prediction}
+prediction <- predict(modFitRandomForest,
+                newdata = validation)
+prediction
+```
+
+
+# Bibliografy
+
+[1] Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.
